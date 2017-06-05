@@ -4,18 +4,20 @@ REPORT zdependencies.
 * todo: check tables from DOMA?
 
 PARAMETERS: p_type TYPE tadir-object OBLIGATORY DEFAULT 'PROG',
-            p_name TYPE tadir-obj_name OBLIGATORY DEFAULT 'ZABAPGIT'.
+            p_name TYPE tadir-obj_name OBLIGATORY DEFAULT 'ZABAPGIT',
+            p_dupl TYPE c AS CHECKBOX DEFAULT ' ',
+            p_cust TYPE c AS CHECKBOX DEFAULT 'X'.
 
 TYPES: BEGIN OF ty_item,
-           obj_type TYPE tadir-object,
-           obj_name TYPE tadir-obj_name,
-         END OF ty_item.
+         obj_type TYPE tadir-object,
+         obj_name TYPE tadir-obj_name,
+       END OF ty_item.
 
 TYPES: ty_item_tt TYPE STANDARD TABLE OF ty_item WITH DEFAULT KEY.
 
 TYPES: BEGIN OF ty_result,
-         item TYPE ty_item,
-         level TYPE i,
+         item    TYPE ty_item,
+         level   TYPE i,
          parents TYPE ty_item_tt,
        END OF ty_result.
 
@@ -26,17 +28,17 @@ CLASS lcl_utils DEFINITION.
     CLASS-METHODS:
       class_or_interface
         IMPORTING
-          iv_name TYPE clike
+          iv_name        TYPE clike
         RETURNING
           VALUE(rv_type) TYPE tadir-object,
       resolve
         IMPORTING
-          iv_name TYPE clike
+          iv_name        TYPE clike
         RETURNING
           VALUE(rv_type) TYPE tadir-object,
       resolve_func
         IMPORTING
-          iv_name TYPE cross-name
+          iv_name        TYPE cross-name
         RETURNING
           VALUE(rv_fugr) TYPE tadir-object.
 ENDCLASS.
@@ -110,9 +112,9 @@ CLASS lcl_utils IMPLEMENTATION.
     SELECT SINGLE * FROM tfdir INTO ls_tfdir WHERE funcname = iv_name.
     IF sy-subrc <> 0.
       BREAK-POINT.
+    ELSE.
+      rv_fugr = ls_tfdir-pname_main+4.
     ENDIF.
-
-    rv_fugr = ls_tfdir-pname_main+4.
 
   ENDMETHOD.
 
@@ -166,7 +168,7 @@ CLASS lcl_object_prog IMPLEMENTATION.
       AND name <> '?'.                                    "#EC CI_SUBRC
     LOOP AT lt_cross ASSIGNING FIELD-SYMBOL(<ls_cross>).
       CASE <ls_cross>-type.
-        WHEN 'F'.
+       WHEN 'F'.
           lv_type = 'FUGR'.
           <ls_cross>-name = lcl_utils=>resolve_func( <ls_cross>-name ).
           IF <ls_cross>-name IS INITIAL.
@@ -180,6 +182,8 @@ CLASS lcl_object_prog IMPLEMENTATION.
           lv_type = 'TYPE'.
         WHEN 'A'.
           lv_type = 'SUSO'.
+        WHEN '3'.
+          CONTINUE. " MSAG
         WHEN 'N' OR 'P'.
           CONTINUE. " hmm, dunno
         WHEN 'U'.
@@ -421,16 +425,19 @@ CLASS lcl_dep DEFINITION.
     CLASS-METHODS:
       analyze
         IMPORTING
-          iv_type TYPE tadir-object
-          iv_name TYPE tadir-obj_name
+          iv_type          TYPE tadir-object
+          iv_name          TYPE tadir-obj_name
         RETURNING
           VALUE(rt_result) TYPE ty_result_tt.
 
   PRIVATE SECTION.
     CLASS-METHODS:
+      remove_standard
+        CHANGING
+          ct_result TYPE ty_result_tt,
       find_dependencies
         IMPORTING
-          is_result TYPE ty_result
+          is_result        TYPE ty_result
         RETURNING
           VALUE(rt_result) TYPE ty_result_tt.
 
@@ -440,8 +447,11 @@ CLASS lcl_dep IMPLEMENTATION.
 
   METHOD analyze.
 
-    DATA: lv_index TYPE i,
-          lt_deps  TYPE ty_result_tt.
+    DATA: lv_index  TYPE i,
+          lv_dindex TYPE i,
+          lt_deps   TYPE ty_result_tt.
+
+    FIELD-SYMBOLS: <ls_dep> LIKE LINE OF lt_deps.
 
 
     APPEND INITIAL LINE TO rt_result ASSIGNING FIELD-SYMBOL(<ls_res>).
@@ -453,6 +463,19 @@ CLASS lcl_dep IMPLEMENTATION.
     LOOP AT rt_result ASSIGNING <ls_res>.
       lv_index = sy-tabix + 1.
       lt_deps = find_dependencies( <ls_res> ).
+
+      IF p_dupl = abap_false.
+        LOOP AT lt_deps ASSIGNING <ls_dep>.
+          lv_dindex = sy-tabix.
+          READ TABLE rt_result WITH KEY
+            item-obj_type = <ls_dep>-item-obj_type
+            item-obj_name = <ls_dep>-item-obj_name TRANSPORTING NO FIELDS.
+          IF sy-subrc = 0.
+            DELETE lt_deps INDEX lv_dindex.
+          ENDIF.
+        ENDLOOP.
+      ENDIF.
+
       INSERT LINES OF lt_deps INTO rt_result INDEX lv_index.
     ENDLOOP.
 
@@ -502,6 +525,43 @@ CLASS lcl_dep IMPLEMENTATION.
 
     SORT rt_result BY item-obj_type ASCENDING item-obj_name ASCENDING.
     DELETE ADJACENT DUPLICATES FROM rt_result COMPARING item-obj_type item-obj_name.
+
+    IF p_cust = abap_true.
+      remove_standard( CHANGING ct_result = rt_result ).
+    ENDIF.
+
+  ENDMETHOD.
+
+  METHOD remove_standard.
+
+    DATA: lv_index TYPE i,
+          lt_tadir TYPE STANDARD TABLE OF tadir WITH DEFAULT KEY.
+
+    FIELD-SYMBOLS: <ls_tadir>  LIKE LINE OF lt_tadir,
+                   <ls_result> LIKE LINE OF ct_result.
+
+
+    IF lines( ct_result ) = 0.
+      RETURN.
+    ENDIF.
+
+    SELECT * FROM tadir INTO TABLE lt_tadir
+      FOR ALL ENTRIES IN ct_result
+      WHERE pgmid = 'R3TR'
+      AND object = ct_result-item-obj_type
+      AND obj_name = ct_result-item-obj_name
+      ORDER BY PRIMARY KEY.
+
+    LOOP AT ct_result ASSIGNING <ls_result>.
+      lv_index = sy-tabix.
+
+      READ TABLE lt_tadir ASSIGNING <ls_tadir> WITH KEY
+        object = <ls_result>-item-obj_type
+        obj_name = <ls_result>-item-obj_name.
+      IF sy-subrc = 0 AND <ls_tadir>-author = 'SAP'.
+        DELETE ct_result INDEX lv_index.
+      ENDIF.
+    ENDLOOP.
 
   ENDMETHOD.
 
