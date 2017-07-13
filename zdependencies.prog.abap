@@ -6,7 +6,8 @@ REPORT zdependencies.
 PARAMETERS: p_type TYPE tadir-object OBLIGATORY DEFAULT 'PROG',
             p_name TYPE tadir-obj_name OBLIGATORY DEFAULT 'ZABAPGIT',
             p_dupl TYPE c AS CHECKBOX DEFAULT ' ',
-            p_cust TYPE c AS CHECKBOX DEFAULT 'X'.
+            p_cust TYPE c AS CHECKBOX DEFAULT 'X',
+            p_show TYPE c AS CHECKBOX DEFAULT ' '.
 
 TYPES: BEGIN OF ty_item,
          obj_type TYPE tadir-object,
@@ -168,7 +169,7 @@ CLASS lcl_object_prog IMPLEMENTATION.
       AND name <> '?'.                                    "#EC CI_SUBRC
     LOOP AT lt_cross ASSIGNING FIELD-SYMBOL(<ls_cross>).
       CASE <ls_cross>-type.
-       WHEN 'F'.
+        WHEN 'F'.
           lv_type = 'FUGR'.
           <ls_cross>-name = lcl_utils=>resolve_func( <ls_cross>-name ).
           IF <ls_cross>-name IS INITIAL.
@@ -182,6 +183,10 @@ CLASS lcl_object_prog IMPLEMENTATION.
           lv_type = 'TYPE'.
         WHEN 'A'.
           lv_type = 'SUSO'.
+        WHEN '0'.
+          CONTINUE. " DEVC?
+        WHEN 'K'.
+          CONTINUE. " macro
         WHEN '3'.
           CONTINUE. " MSAG
         WHEN 'N' OR 'P'.
@@ -387,19 +392,30 @@ CLASS lcl_object_tabl DEFINITION INHERITING FROM lcl_objects_super FINAL.
   PUBLIC SECTION.
     INTERFACES lif_object.
 ENDCLASS.
+
 CLASS lcl_object_tabl IMPLEMENTATION.
+
   METHOD lif_object~find_dependencies.
-    DATA: lt_dd03l TYPE STANDARD TABLE OF dd03l WITH DEFAULT KEY.
+
+    DATA: lv_tabname TYPE dd02l-tabname,
+          lt_dd03l   TYPE STANDARD TABLE OF dd03l WITH DEFAULT KEY.
+
     SELECT * FROM dd03l INTO TABLE lt_dd03l
       WHERE tabname = ms_item-obj_name.                   "#EC CI_SUBRC
     LOOP AT lt_dd03l ASSIGNING FIELD-SYMBOL(<ls_dd03l>).
       IF <ls_dd03l>-fieldname = '.INCLUDE'.
         APPEND VALUE #( obj_type  = 'TABL' obj_name  = <ls_dd03l>-precfield ) TO rt_result.
       ELSEIF NOT <ls_dd03l>-rollname IS INITIAL.
-        APPEND VALUE #( obj_type  = 'DTEL' obj_name  = <ls_dd03l>-rollname ) TO rt_result.
+        SELECT SINGLE tabname FROM dd02l INTO lv_tabname WHERE tabname = <ls_dd03l>-rollname.
+        IF sy-subrc = 0.
+          APPEND VALUE #( obj_type  = 'TABL' obj_name  = <ls_dd03l>-rollname ) TO rt_result.
+        ELSE.
+          APPEND VALUE #( obj_type  = 'DTEL' obj_name  = <ls_dd03l>-rollname ) TO rt_result.
+        ENDIF.
       ENDIF.
     ENDLOOP.
   ENDMETHOD.
+
 ENDCLASS.
 
 CLASS lcl_object_dtel DEFINITION INHERITING FROM lcl_objects_super FINAL.
@@ -579,12 +595,30 @@ FORM run.
   DATA(lt_result) = lcl_dep=>analyze( iv_type = p_type
                                       iv_name = p_name ).
 
+  IF p_show = abap_true AND lines( lt_result ) > 0.
+    SELECT object, obj_name, devclass
+      FROM tadir
+      INTO TABLE @DATA(lt_tadir)
+      FOR ALL ENTRIES IN @lt_result
+      WHERE pgmid = 'R3TR'
+      AND object = @lt_result-item-obj_type
+      AND obj_name = @lt_result-item-obj_name.
+  ENDIF.
+
   LOOP AT lt_result ASSIGNING FIELD-SYMBOL(<ls_res>).
     CLEAR lv_spaces.
     DO <ls_res>-level TIMES.
       CONCATENATE space space lv_spaces INTO lv_spaces RESPECTING BLANKS.
     ENDDO.
     WRITE: / lv_spaces, <ls_res>-item-obj_type, <ls_res>-item-obj_name.
+    IF p_show = abap_true.
+      READ TABLE lt_tadir INTO DATA(ls_tadir) WITH KEY
+        object = <ls_res>-item-obj_type
+        obj_name = <ls_res>-item-obj_name.
+      IF sy-subrc = 0.
+        WRITE: 80 ls_tadir-devclass.
+      ENDIF.
+    ENDIF.
   ENDLOOP.
 
   WRITE: /.
