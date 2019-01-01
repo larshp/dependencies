@@ -88,7 +88,10 @@ FORM download RAISING zcx_abapgit_exception.
     RETURN.
   ENDIF.
 
-  LOOP AT gt_total INTO DATA(ls_total) WHERE type = 'CLAS' OR type = 'INTF'.
+* todo more, eg. FUNC + STRU
+
+  LOOP AT gt_total INTO DATA(ls_total) WHERE type = 'CLAS' OR type = 'INTF' OR type = 'DTEL'
+      OR type = 'DOMA' OR type = 'TTYP' OR type = 'TABL'.
     DATA(ls_files_item) = zcl_abapgit_objects=>serialize(
       is_item = VALUE #(  obj_type = ls_total-type obj_name = ls_total-object )
       iv_language = sy-langu ).
