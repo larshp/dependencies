@@ -1,6 +1,6 @@
 REPORT zdependencies2.
 
-PARAMETERS: p_devc TYPE devclass DEFAULT '$ABAPGIT',
+PARAMETERS: p_devc TYPE devclass DEFAULT '$PGP',
             p_down TYPE c AS CHECKBOX DEFAULT 'X'.
 
 DATA: gt_total TYPE STANDARD TABLE OF senvi WITH DEFAULT KEY.
@@ -92,9 +92,12 @@ FORM download RAISING zcx_abapgit_exception.
 
   LOOP AT gt_total INTO DATA(ls_total) WHERE type = 'CLAS' OR type = 'INTF' OR type = 'DTEL'
       OR type = 'DOMA' OR type = 'TTYP' OR type = 'TABL'.
+
     DATA(ls_files_item) = zcl_abapgit_objects=>serialize(
       is_item = VALUE #(  obj_type = ls_total-type obj_name = ls_total-object )
       iv_language = sy-langu ).
+
+    PERFORM build_clas CHANGING ls_files_item.
 
     LOOP AT ls_files_item-files ASSIGNING FIELD-SYMBOL(<ls_file>).
       CONCATENATE lv_folder lv_sep <ls_file>-filename INTO lv_fullpath.
@@ -140,5 +143,66 @@ FORM download RAISING zcx_abapgit_exception.
     ENDLOOP.
 
   ENDLOOP.
+
+ENDFORM.
+
+FORM build_clas CHANGING files TYPE zcl_abapgit_objects=>ty_serialization.
+  IF files-item-obj_type <> 'CLAS'.
+    RETURN.
+  ENDIF.
+
+  DELETE files-files WHERE filename CP '*.clas.locals_def.abap'.
+  DELETE files-files WHERE filename CP '*.clas.locals_imp.abap'.
+  DELETE files-files WHERE filename CP '*.clas.macros.abap'.
+  DELETE files-files WHERE filename CP '*.clas.xml'. " todo?
+  DELETE files-files WHERE filename CP '*.clas.testclasses.abap'.
+
+  DATA: lt_text   TYPE abaptxt255_tab,
+        lv_string TYPE string.
+
+  PERFORM build_code USING files-item-obj_name CHANGING lt_text.
+  CONCATENATE LINES OF lt_text INTO lv_string SEPARATED BY cl_abap_char_utilities=>newline.
+*  BREAK-POINT.
+  LOOP AT files-files ASSIGNING FIELD-SYMBOL(<ls_file>) WHERE filename CP '*.clas.abap'.
+    <ls_file>-data = zcl_abapgit_convert=>string_to_xstring_utf8( lv_string ).
+  ENDLOOP.
+
+ENDFORM.
+
+FORM build_code USING class TYPE clike CHANGING ct_code TYPE abaptxt255_tab RAISING cx_class_not_existent.
+
+  DATA lt_text TYPE abaptxt255_tab.
+
+  DATA(lo_class) = CAST cl_oo_class( cl_oo_class=>get_instance( CONV #( class ) ) ).
+  DATA(lt_includes) = cl_oo_classname_service=>get_all_method_includes( CONV #( class ) ).
+  DATA(lt_methods) = lo_class->get_methods( ).
+  DATA(lv_final) = lo_class->is_final( ).
+
+  DATA(lv_include) = cl_oo_classname_service=>get_pubsec_name( CONV #( class ) ).
+  READ REPORT lv_include INTO lt_text.
+  APPEND LINES OF lt_text TO ct_code.
+
+  IF lv_final = abap_false.
+    lv_include = cl_oo_classname_service=>get_prosec_name( CONV #( class ) ).
+    READ REPORT lv_include INTO lt_text.
+    APPEND LINES OF lt_text TO ct_code.
+  ENDIF.
+
+  APPEND |ENDCLASS.| TO ct_code.
+  APPEND |CLASS { to_lower( class ) } IMPLEMENTATION.| TO ct_code.
+
+  LOOP AT lt_includes INTO DATA(ls_include).
+    IF line_exists( lt_methods[ cmpname = ls_include-cpdkey-cpdname exposure = 0 ] ).
+      CONTINUE. " private method
+    ELSEIF lv_final = abap_true AND line_exists( lt_methods[ cmpname = ls_include-cpdkey-cpdname exposure = 1 ] ).
+      CONTINUE. " protected method
+    ENDIF.
+    APPEND |  METHOD { to_lower( ls_include-cpdkey-cpdname ) }.| TO ct_code.
+    APPEND |  ENDMETHOD.| TO ct_code.
+  ENDLOOP.
+
+  APPEND |ENDCLASS.| TO ct_code.
+
+* todo, run pretty printer on ct_code
 
 ENDFORM.
