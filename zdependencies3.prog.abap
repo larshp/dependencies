@@ -65,8 +65,10 @@ FORM find_clas_dependencies USING pv_name TYPE tadir-obj_name
 
   DATA: lt_includes TYPE STANDARD TABLE OF programm WITH EMPTY KEY.
 
+  DATA(lv_clsname) = CONV seoclsname( pv_name ).
+
   TRY.
-      DATA(lv_final) = CAST cl_oo_class( cl_oo_class=>get_instance( CONV #( pv_name ) ) )->is_final( ).
+      DATA(lv_final) = CAST cl_oo_class( cl_oo_class=>get_instance( lv_clsname ) )->is_final( ).
     CATCH cx_class_not_existent.
       RETURN.
   ENDTRY.
@@ -81,6 +83,14 @@ FORM find_clas_dependencies USING pv_name TYPE tadir-obj_name
     FOR ALL ENTRIES IN @lt_includes
     WHERE include = @lt_includes-table_line
     AND name <> @pv_name.
+  IF lines( lt_wbcrossgt ) = 0.
+* update so it is correct in the next run
+    PERFORM update_index USING lv_clsname.
+    SELECT * FROM wbcrossgt INTO CORRESPONDING FIELDS OF TABLE @lt_wbcrossgt
+      FOR ALL ENTRIES IN @lt_includes
+      WHERE include = @lt_includes-table_line
+      AND name <> @pv_name.
+  ENDIF.
 
   IF pv_level < p_mlvl.
     PERFORM resolve USING lt_wbcrossgt CHANGING ct_tadir.
@@ -88,6 +98,21 @@ FORM find_clas_dependencies USING pv_name TYPE tadir-obj_name
     BREAK-POINT.
   ENDIF.
 
+ENDFORM.
+
+FORM update_index USING pv_name TYPE seoclsname.
+
+  DATA: lo_cross   TYPE REF TO cl_wb_crossreference,
+        lv_include TYPE programm.
+
+  lv_include = cl_oo_classname_service=>get_classpool_name( pv_name ).
+
+  CREATE OBJECT lo_cross
+    EXPORTING
+      p_name    = lv_include
+      p_include = lv_include.
+
+  lo_cross->index_actualize( ).
 ENDFORM.
 
 FORM resolve USING it_wbcrossgt TYPE wbcrossgtt
@@ -159,13 +184,13 @@ FORM get_dependencies
   SORT lt_tadir BY ref_obj_type ASCENDING ref_obj_name ASCENDING.
   DELETE ADJACENT DUPLICATES FROM lt_tadir COMPARING ref_obj_type ref_obj_name.
 
+*  DELETE lt_tadir WHERE ref_obj_type = 'TABL'.
+*  DELETE lt_tadir WHERE ref_obj_type = 'VIEW'.
   DELETE lt_tadir WHERE ref_obj_type = 'FUGR'.
   DELETE lt_tadir WHERE ref_obj_type = 'DTEL'.
   DELETE lt_tadir WHERE ref_obj_type = 'SFSW'.
   DELETE lt_tadir WHERE ref_obj_type = 'DEVC'.
-*  DELETE lt_tadir WHERE ref_obj_type = 'TABL'.
   DELETE lt_tadir WHERE ref_obj_type = 'SUSO'.
-  DELETE lt_tadir WHERE ref_obj_type = 'VIEW'.
   DELETE lt_tadir WHERE ref_obj_type = 'TYPE'.
   DELETE lt_tadir WHERE ref_obj_type = 'TTYP'.
   DELETE lt_tadir WHERE ref_obj_type = 'PROG'.
@@ -313,7 +338,12 @@ FORM build_code USING class TYPE clike CHANGING ct_code TYPE abaptxt255_tab RAIS
 
   DATA lt_text TYPE abaptxt255_tab.
 
-  DATA(lo_class) = CAST cl_oo_class( cl_oo_class=>get_instance( CONV #( class ) ) ).
+  TRY.
+      DATA(lo_class) = CAST cl_oo_class( cl_oo_class=>get_instance( CONV #( class ) ) ).
+    CATCH cx_class_not_existent.
+      RETURN.
+  ENDTRY.
+
   DATA(lt_includes) = cl_oo_classname_service=>get_all_method_includes( CONV #( class ) ).
   DATA(lt_methods) = lo_class->get_methods( ).
   DATA(lv_final) = lo_class->is_final( ).
